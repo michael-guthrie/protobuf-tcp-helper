@@ -8,20 +8,28 @@
 
     public class Worker : IWorker
     {
-        public async Task<ICollection<PocTypeB>> GetTypeBsAsync() =>
-            await Task.FromResult(
-                Enumerable.Range(new Random().Next(1, 1000), new Random().Next(3, 30))
-                          .Select(i =>
-                                      new PocTypeB
-                                      {
-                                          Id = i,
-                                          Message = Guid.NewGuid().ToString(),
-                                          ExpireDate = i % 3 == 0 ? (DateTime?)null : DateTime.Now.AddDays(i)
-                                      })
-                          .ToList());
+        public async Task<ICollection<PocTypeB>> GetTypeBsAsync()
+        {
+            // Mimic persistence store access.
+            await Task.Delay(50);
 
-        public PocTypeA GetTypeA(int id) =>
-            new PocTypeA
+            return Enumerable.Range(new Random().Next(1, 1000), new Random().Next(3, 30))
+                                      .Select(i =>
+                                                  new PocTypeB
+                                                  {
+                                                      Id = i,
+                                                      Message = Guid.NewGuid().ToString(),
+                                                      ExpireDate = i % 3 == 0 ? (DateTime?)null : DateTime.Now.AddDays(i)
+                                                  })
+                                      .ToList();
+        }
+
+        public async Task<PocTypeA> GetTypeAAsync(int id)
+        {
+            // Mimic persistence store access.
+            await Task.Delay(50);
+
+            return new PocTypeA
             {
                 Id = id,
                 Children = Enumerable.Range(id * 100, id % 100)
@@ -34,11 +42,23 @@
                                      .ToList(),
                 Name = Guid.NewGuid().ToString(),
                 PostDate = DateTime.Today,
-                Quazars = id % 5 == 0 ? id : (int?) null
+                Quazars = id % 5 == 0 ? id : (int?)null
             };
+        }
 
-        public int SendTypeA(PocTypeA model) => model.Id;
+        public async Task<int> SendTypeAAsync(PocTypeA model)
+        {
+            // Mimic persistence store access.
+            await Task.Delay(50);
 
-        public int SendTypeB(PocTypeB model) => model.Id;
+            return model.Id;
+        }
+        public async Task<int> SendTypeBAsync(PocTypeB model)
+        {
+            // Mimic persistence store access.
+            await Task.Delay(50);
+
+            return model.Id;
+        }
     }
 }

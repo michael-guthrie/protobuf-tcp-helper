@@ -73,8 +73,8 @@
 
         public MainViewModel()
         {
-            OnSendTypeA = new ActionCommand(SendTypeA);
-            OnSendTypeB = new ActionCommand(SendTypeB);
+            OnSendTypeA = new ActionCommand(async () => await SendTypeA());
+            OnSendTypeB = new ActionCommand(async () => await SendTypeB());
             OnGetTypeBs = new ActionCommand(async () => await GetTypeBs());
             _workerClient = new WorkerClient(ConnectionConstants.Server);
         }
@@ -85,11 +85,11 @@
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        private void SendTypeA()
+        private async Task SendTypeA()
         {
             TypeA.Children = CreateRandomChildren();
 
-            int result = _workerClient.SendTypeA(TypeA);
+            int result = await _workerClient.SendTypeAAsync(TypeA);
 
             Debug.WriteLine($"{nameof(SendTypeA)} : {result}");
         }
@@ -101,9 +101,9 @@
             return Enumerable.Repeat<Func<PocTypeAChild>>(RandomChild, TypeAChildCount).Select(fn => fn()).ToList();
         }
 
-        private void SendTypeB()
+        private async Task SendTypeB()
         {
-            int result = _workerClient.SendTypeB(TypeB);
+            int result = await _workerClient.SendTypeBAsync(TypeB);
 
             Debug.WriteLine($"{nameof(SendTypeB)} : {result}");
         }

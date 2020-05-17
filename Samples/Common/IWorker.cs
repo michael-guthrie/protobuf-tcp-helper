@@ -7,8 +7,8 @@
     public interface IWorker
     {
         Task<ICollection<PocTypeB>> GetTypeBsAsync();
-        PocTypeA GetTypeA(int id);
-        int SendTypeA(PocTypeA model);
-        int SendTypeB(PocTypeB model);
+        Task<PocTypeA> GetTypeAAsync(int id);
+        Task<int> SendTypeAAsync(PocTypeA model);
+        Task<int> SendTypeBAsync(PocTypeB model);
     }
 }

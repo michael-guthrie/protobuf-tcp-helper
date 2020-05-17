@@ -36,7 +36,7 @@
                     while (_isOpen)
                     {
                         TcpClient client = await server.AcceptTcpClientAsync();
-                        var _ = _worker.HandleClient(
+                        var _ = _worker.HandleClientAsync(
                             client,
                             onRequestReceived: async (op, body) =>
                                 await Dispatcher.InvokeAsync(

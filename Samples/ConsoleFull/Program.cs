@@ -59,11 +59,11 @@
             stopwatch.Stop();
             Console.WriteLine(stopwatch.Elapsed);
 
-            //Console.WriteLine("Testing parallel client...");
-            //stopwatch.Restart();
-            //SendTypeBParallel();
-            //stopwatch.Stop();
-            //Console.WriteLine(stopwatch.Elapsed);
+            Console.WriteLine("Testing parallel client...");
+            stopwatch.Restart();
+            SendTypeBParallelClient();
+            stopwatch.Stop();
+            Console.WriteLine(stopwatch.Elapsed);
 
             Console.WriteLine("Testing new socket per request...");
             stopwatch.Restart();
@@ -77,6 +77,12 @@
             stopwatch.Stop();
             Console.WriteLine(stopwatch.Elapsed);
 
+            Console.WriteLine("Testing parallel Socket...");
+            stopwatch.Restart();
+            SendTypeBParallelSocket();
+            stopwatch.Stop();
+            Console.WriteLine(stopwatch.Elapsed);
+
             _isOpen = false;
             cancellationTokenSource.Cancel();
 
@@ -85,6 +91,27 @@
             Console.WriteLine($"Total server responses: {_serverResponses}");
             Console.WriteLine($"Total client exceptions: {_clientExceptions}");
             Console.WriteLine($"Total server exceptions: {_serverExceptions}");
+        }
+
+        private static readonly TaskFactory factory = new
+            TaskFactory(CancellationToken.None,
+                        TaskCreationOptions.None,
+                        TaskContinuationOptions.None,
+                        TaskScheduler.Default);
+        private static T RunSync<T>(Func<Task<T>> op) => factory.StartNew(op).Unwrap().GetAwaiter().GetResult();
+
+        private static void ClientTestOp(NetworkStream stream)
+        {
+            RunSync(async () => await stream.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
+            //RunSync(async () => await stream.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
+            Interlocked.Increment(ref _clientRequests);
+        }
+
+        private static void SocketTestOp(Socket socket)
+        {
+            RunSync(async () => await socket.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
+            //RunSync(async () => await socket.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
+            Interlocked.Increment(ref _clientRequests);
         }
 
         private static void StartListener()
@@ -100,8 +127,10 @@
                         Socket client = await server.AcceptSocketAsync().ConfigureAwait(false);
                         //TcpClient client = await server.AcceptTcpClientAsync();
                         ++_clientCount;
-                        var _ = Worker.HandleClientAsync(client, onSendingResponse: (op, result) => ++_serverResponses,
-                                                    onError: ex => ++_serverExceptions).ConfigureAwait(false);
+                        var _ = Worker.HandleClientAsync(client,
+                                                         onSendingResponse: (op, result) => Interlocked.Increment(ref _serverResponses),
+                                                         onError: ex => Interlocked.Increment(ref _serverExceptions))
+                                      .ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -133,8 +162,10 @@
                             return;
                         }
 
-                        var _ = Worker.HandleClientAsync(client, onSendingResponse: (op, result) => ++_serverResponses,
-                                                    onError: ex => ++_serverExceptions).ConfigureAwait(false);
+                        var _ = Worker.HandleClientAsync(client, 
+                                                         onSendingResponse: (op, result) => Interlocked.Increment(ref _serverResponses),
+                                                         onError: ex => Interlocked.Increment(ref _serverExceptions))
+                                      .ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -152,22 +183,24 @@
         {
             using var client = new WorkerClient();
             await client.GetTypeBsAsync();
+            ++_clientRequests;
         }
 
-        public static void SendTypeBParallel()
+        public static void SendTypeBParallelClient()
         {
-            using var client = new WorkerClient();
             Parallel.For(0, TestSize,
                          i =>
                          {
                              try
                              {
-                                 client.SendTypeB(TestTypeB);
-                                 ++_clientRequests;
+                                 using var client = new TcpClient();
+                                 client.Connect(ConnectionConstants.Server);
+                                 using var stream = client.GetStream();
+                                 ClientTestOp(stream);
                              }
                              catch
                              {
-                                 ++_clientExceptions;
+                                 Interlocked.Increment(ref _clientExceptions);
                              }
                          }
             );
@@ -177,15 +210,12 @@
         {
             try
             {
-                using var client = new WorkerClient();
                 for (int i = 0; i < TestSize; i++)
                 {
-                    client.SendTypeA(TestTypeA);
-                    ++_clientRequests;
-                    //client.SendTypeB(TestTypeB);
-                    //++_clientRequests;
-                    //client.GetTypeBs();
-                    //++_clientRequests;
+                    using var client = new TcpClient();
+                    client.Connect(ConnectionConstants.Server);
+                    using var stream = client.GetStream();
+                    ClientTestOp(stream);
                 }
             }
             catch
@@ -204,17 +234,7 @@
 
                 for (int i = 0; i < TestSize; i++)
                 {
-                    // Send the client request.
-                    var _ = stream.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeA, TestTypeA).Result;
-                    ++_clientRequests;
-
-                    //// Send the client request.
-                    //stream.Request<PocTypeB, int>(worker => worker.SendTypeB, TestTypeB);
-                    //++_clientRequests;
-
-                    //// Send the client request.
-                    //stream.Request<ICollection<PocTypeB>>(worker => worker.GetTypeBs);
-                    //++_clientRequests;
+                    ClientTestOp(stream);
                 }
             }
             catch
@@ -231,8 +251,7 @@
                 {
                     using var client = new Socket(SocketType.Stream, ProtocolType.Tcp);
                     client.Connect(ConnectionConstants.Server);
-                    client.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeB, TestTypeB);
-                    ++_clientRequests;
+                    SocketTestOp(client);
                 }
             }
             catch
@@ -249,14 +268,32 @@
                 client.Connect(ConnectionConstants.Server);
                 for (int i = 0; i < TestSize; i++)
                 {
-                    client.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeB, TestTypeB);
-                    ++_clientRequests;
+                    SocketTestOp(client);
                 }
             }
             catch
             {
                 ++_clientExceptions;
             }
+        }
+
+        public static void SendTypeBParallelSocket()
+        {
+            Parallel.For(0, TestSize,
+                         i =>
+                         {
+                             try
+                             {
+                                 using var client = new Socket(SocketType.Stream, ProtocolType.Tcp);
+                                 client.Connect(ConnectionConstants.Server);
+                                 SocketTestOp(client);
+                             }
+                             catch
+                             {
+                                 Interlocked.Increment(ref _clientExceptions);
+                             }
+                         }
+            );
         }
     }
 }

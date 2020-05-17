@@ -31,10 +31,10 @@
             return _client;
         }
 
-        protected TResult MakeRequest<TResult>([CallerMemberName] string invokingMethod = "") =>
-            MakeRequest<object, TResult>(null, invokingMethod);
+        protected async Task<TResult> MakeRequestAsync<TResult>([CallerMemberName] string invokingMethod = "") =>
+            await MakeRequestAsync<object, TResult>(null, invokingMethod);
 
-        protected TResult MakeRequest<TArgument, TResult>(TArgument requestParameter,
+        protected async Task<TResult> MakeRequestAsync<TArgument, TResult>(TArgument requestParameter,
                                                           [CallerMemberName] string invokingMethod = "")
         {
             var request = new OperationWrapper(invokingMethod, requestParameter);
@@ -45,23 +45,16 @@
                 Socket socket = GetSocket();
 
                 // Send the client request.
-                socket.SendWrapperRequest(request);
+                await socket.SendWrapperRequestAsync(request);
 
                 // Now read back the server response.
-                return socket.GetWrapperResponse().GetBodyAs<TResult>();
+                return (await socket.GetWrapperResponseAsync()).GetBodyAs<TResult>();
             }
             finally
             {
                 _lock.Release();
             }
         }
-
-        protected async Task<TResult> MakeRequestAsync<TResult>([CallerMemberName] string invokingMethod = "") =>
-            await Task.Run(() => MakeRequest<object, TResult>(null, invokingMethod));
-
-        protected async Task<TResult> MakeRequestAsync<TArgument, TResult>(
-            TArgument requestParameter, [CallerMemberName] string invokingMethod = "") =>
-            await Task.Run(() => MakeRequest<TArgument, TResult>(requestParameter, invokingMethod));
 
         public void Dispose()
         {
@@ -93,13 +86,13 @@
             return _client;
         }
 
-        public TResult MakeRequest<TResult>(Expression<Func<TServiceContract, Func<TResult>>> serviceMethod)
+        public async Task<TResult> MakeRequestAsync<TResult>(Expression<Func<TServiceContract, Func<TResult>>> serviceMethod)
         {
             _lock.Wait();
             try
             {
                 Socket socket = GetSocket();
-                return socket.Request(serviceMethod);
+                return await socket.RequestAsync(serviceMethod);
             }
             finally
             {
@@ -107,28 +100,20 @@
             }
         }
 
-        public TResult MakeRequest<TArgument, TResult>(
+        public async Task<TResult> MakeRequestAsync<TArgument, TResult>(
             Expression<Func<TServiceContract, Func<TArgument, TResult>>> serviceMethod, TArgument requestParameter)
         {
             _lock.Wait();
             try
             {
                 Socket socket = GetSocket();
-                return socket.Request(serviceMethod, requestParameter);
+                return await socket.RequestAsync(serviceMethod, requestParameter);
             }
             finally
             {
                 _lock.Release();
             }
         }
-
-        public async Task<TResult> MakeRequestAsync<TResult>(
-            Expression<Func<TServiceContract, Func<TResult>>> serviceMethod) =>
-            await Task.Run(() => MakeRequest(serviceMethod));
-
-        public async Task<TResult> MakeRequestAsync<TArgument, TResult>(
-            Expression<Func<TServiceContract, Func<TArgument, TResult>>> serviceMethod, TArgument requestParameter) =>
-            await Task.Run(() => MakeRequest(serviceMethod, requestParameter));
 
         public void Dispose()
         {
