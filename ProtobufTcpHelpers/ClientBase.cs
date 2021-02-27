@@ -37,7 +37,7 @@
         protected async Task<TResult> MakeRequestAsync<TArgument, TResult>(TArgument requestParameter,
                                                           [CallerMemberName] string invokingMethod = "")
         {
-            var request = new OperationWrapper(invokingMethod, requestParameter);
+            var request = OperationWrapper.ForRequest(invokingMethod, new object[] { requestParameter });
             _lock.Wait();
 
             try
@@ -48,7 +48,7 @@
                 await socket.SendWrapperRequestAsync(request);
 
                 // Now read back the server response.
-                return (await socket.GetWrapperResponseAsync()).GetBodyAs<TResult>();
+                return (await socket.GetWrapperResponseAsync()).GetResultAs<TResult>();
             }
             finally
             {

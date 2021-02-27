@@ -8,30 +8,59 @@
     internal sealed class OperationWrapper
     {
         [ProtoMember(1)]
-        public string Operation { get; }
+        public string Operation { get; private set; }
 
         [ProtoMember(2)]
-        public byte[] Body { get; }
+        public byte[] Result { get; private set; }
 
-        public static OperationWrapper SessionEnded { get; } = new OperationWrapper("SESSION_END");
+        [ProtoMember(3)]
+        public byte[][] Arguments { get; private set; }
+
+        public static OperationWrapper SessionEnded { get; } = new OperationWrapper { Operation = "SESSION_END" };
 
         private OperationWrapper() { }
 
-        public OperationWrapper(string operation, object content = null)
+        public static OperationWrapper FromResult(string operation, object content)
         {
-            Operation = operation;
+            var wrapper = new OperationWrapper
+            {
+                Operation = operation
+            };
 
             if (content != null)
             {
                 using var ms = new MemoryStream();
                 Serializer.Serialize(ms, content);
-                Body = ms.ToArray();
+                wrapper.Result = ms.ToArray();
             }
+
+            return wrapper;
         }
 
-        public T GetBodyAs<T>()
+        public static OperationWrapper ForRequest(string operation, object[] arguments = null)
         {
-            if (Body == null)
+            var wrapper = new OperationWrapper
+            {
+                Operation = operation
+            };
+
+            if (arguments?.Length > 0)
+            {
+                wrapper.Arguments = new byte[arguments.Length][];
+                for (int i = 0; i < arguments.Length; i++)
+                {
+                    using var ms = new MemoryStream();
+                    Serializer.Serialize(ms, arguments[i]);
+                    wrapper.Arguments[i] = ms.ToArray();
+                }
+            }
+
+            return wrapper;
+        }
+
+        public T GetResultAs<T>()
+        {
+            if (Result == null)
             {
                 if (default(T) != null)
                 {
@@ -41,7 +70,7 @@
                 return default;
             }
 
-            using var stream = new MemoryStream(Body);
+            using var stream = new MemoryStream(Result);
             return Serializer.Deserialize<T>(stream);
         }
     }

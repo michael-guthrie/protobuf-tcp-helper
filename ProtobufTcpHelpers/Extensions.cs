@@ -22,10 +22,23 @@
 
             object[] arguments = null;
             ParameterInfo[] methodParameters = method.GetParameters();
-            if (request.Body?.Length > 0 && methodParameters.Length > 0)
+            if (request.Arguments?.Length > 0)
             {
-                await using var stream = new MemoryStream(request.Body);
-                arguments = new[] {Serializer.Deserialize(methodParameters[0].ParameterType, stream)};
+                if (request.Arguments.Length != methodParameters.Length)
+                {
+                    throw new ArgumentException("Given request parameters did not match parameters for the operation.");
+                }
+                arguments = new object[methodParameters.Length];
+                for (int i = 0; i < methodParameters.Length; i++)
+                {
+                    if (request.Arguments[i] == null)
+                    {
+                        arguments[i] = null;
+                        continue;
+                    }
+                    await using var stream = new MemoryStream(request.Arguments[i]);
+                    arguments[i] = Serializer.Deserialize(methodParameters[i].ParameterType, stream);
+                }
             }
 
             bool isAwaitable = method.ReturnType.GetMethod(nameof(Task.GetAwaiter)) != null;
@@ -132,9 +145,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, new OperationWrapper(targetMethod.Name), cancellationToken).ConfigureAwait(false);
+            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name), cancellationToken).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -162,9 +175,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, new OperationWrapper(targetMethod.Name), cancellationToken).ConfigureAwait(false);
+            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name), cancellationToken).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -195,9 +208,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, new OperationWrapper(targetMethod.Name, argument), cancellationToken).ConfigureAwait(false);
+            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }), cancellationToken).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -228,9 +241,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, new OperationWrapper(targetMethod.Name, argument), cancellationToken).ConfigureAwait(false);
+            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }), cancellationToken).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -246,7 +259,7 @@
         public static async Task HandleClientAsync<TService>(
             this TService worker, TcpClient client,
             CancellationToken cancellationToken = default,
-            Action<string, byte[]> onRequestReceived = null,
+            Action<string, byte[][]> onRequestReceived = null,
             Action<string, object> onSendingResponse = null,
             Action<Exception> onError = null)
         {
@@ -262,13 +275,13 @@
                            client.Connected && stream.CanRead &&
                            (request = await stream.GetWrapperResponseAsync(cancellationToken).ConfigureAwait(false)) != OperationWrapper.SessionEnded)
                     {
-                        onRequestReceived?.Invoke(request.Operation, request.Body);
+                        onRequestReceived?.Invoke(request.Operation, request.Arguments);
 
                         object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
 
                         // Now send back a response.
                         onSendingResponse?.Invoke(request.Operation, result);
-                        await stream.SendWrapperRequestAsync(new OperationWrapper(request.Operation, result), cancellationToken);
+                        await stream.SendWrapperRequestAsync(OperationWrapper.FromResult(request.Operation, result), cancellationToken);
 
                         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                     }
@@ -298,7 +311,7 @@
         public static async Task HandleClientAsync<TService>(
             this TService worker, TcpClient client,
             CancellationToken cancellationToken = default,
-            Func<string, byte[], Task> onRequestReceived = null,
+            Func<string, byte[][], Task> onRequestReceived = null,
             Func<string, object, Task> onSendingResponse = null,
             Func<Exception, Task> onError = null)
         {
@@ -316,7 +329,7 @@
                     {
                         if (onRequestReceived != null)
                         {
-                            await onRequestReceived.Invoke(request.Operation, request.Body).ConfigureAwait(false);
+                            await onRequestReceived.Invoke(request.Operation, request.Arguments).ConfigureAwait(false);
                         }
 
                         object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
@@ -327,7 +340,7 @@
                             await onSendingResponse.Invoke(request.Operation, result).ConfigureAwait(false);
                         }
 
-                        await stream.SendWrapperRequestAsync(new OperationWrapper(request.Operation, result), cancellationToken).ConfigureAwait(false);
+                        await stream.SendWrapperRequestAsync(OperationWrapper.FromResult(request.Operation, result), cancellationToken).ConfigureAwait(false);
 
                         await stream.FlushAsync().ConfigureAwait(false);
                     }
@@ -429,9 +442,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, new OperationWrapper(targetMethod.Name)).ConfigureAwait(false);
+            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name)).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -458,9 +471,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, new OperationWrapper(targetMethod.Name)).ConfigureAwait(false);
+            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name)).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -490,9 +503,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, new OperationWrapper(targetMethod.Name, argument)).ConfigureAwait(false);
+            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument })).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -522,9 +535,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, new OperationWrapper(targetMethod.Name, argument)).ConfigureAwait(false);
+            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument })).ConfigureAwait(false);
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetBodyAs<TResult>();
+            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -540,7 +553,7 @@
         public static async Task HandleClientAsync<TService>(
             this TService worker, Socket clientSocket,
             CancellationToken cancellationToken = default,
-            Action<string, byte[]> onRequestReceived = null,
+            Action<string, byte[][]> onRequestReceived = null,
             Action<string, object> onSendingResponse = null,
             Action<Exception> onError = null)
         {
@@ -554,13 +567,13 @@
                            clientSocket.Connected &&
                            (request = await clientSocket.GetWrapperResponseAsync().ConfigureAwait(false)) != OperationWrapper.SessionEnded)
                     {
-                        onRequestReceived?.Invoke(request.Operation, request.Body);
+                        onRequestReceived?.Invoke(request.Operation, request.Arguments);
 
                         object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
 
                         // Now send back a response.
                         onSendingResponse?.Invoke(request.Operation, result);
-                        await clientSocket.SendWrapperRequestAsync(new OperationWrapper(request.Operation, result)).ConfigureAwait(false);
+                        await clientSocket.SendWrapperRequestAsync(OperationWrapper.FromResult(request.Operation, result)).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -588,7 +601,7 @@
         public static async Task HandleClientAsync<TService>(
             this TService worker, Socket clientSocket,
             CancellationToken cancellationToken = default,
-            Func<string, byte[], Task> onRequestReceived = null,
+            Func<string, byte[][], Task> onRequestReceived = null,
             Func<string, object, Task> onSendingResponse = null,
             Func<Exception, Task> onError = null)
         {
@@ -604,7 +617,7 @@
                     {
                         if (onRequestReceived != null)
                         {
-                            await onRequestReceived.Invoke(request.Operation, request.Body).ConfigureAwait(false);
+                            await onRequestReceived.Invoke(request.Operation, request.Arguments).ConfigureAwait(false);
                         }
 
                         object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
@@ -615,7 +628,7 @@
                             await onSendingResponse.Invoke(request.Operation, result).ConfigureAwait(false);
                         }
 
-                        await clientSocket.SendWrapperRequestAsync(new OperationWrapper(request.Operation, result)).ConfigureAwait(false);
+                        await clientSocket.SendWrapperRequestAsync(OperationWrapper.FromResult(request.Operation, result)).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)

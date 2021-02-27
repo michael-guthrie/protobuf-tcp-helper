@@ -4,9 +4,12 @@
     using ProtoBuf;
     using ProtobufTcpHelpers;
     using System;
+    using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Net.Sockets;
+    using System.Reflection;
     using System.Threading.Tasks;
     using System.Windows;
 
@@ -59,20 +62,45 @@
             _isOpen = false;
         }
 
-        private string GetOutputText(string operation, byte[] body)
+        private string GetOutputText(string operation, byte[][] arguments)
         {
             string text = operation + Environment.NewLine;
-            if (body == null)
+            if (arguments == null)
             {
                 return text;
             }
 
-            using (var ms = new MemoryStream(body))
-            {
-                text += JsonConvert.SerializeObject(Serializer.Deserialize(typeof(IWorker).GetMethod(operation).ReturnType, ms)) + Environment.NewLine;
-            }
+            text += JsonConvert.SerializeObject(ParseArguments(operation, arguments)) + Environment.NewLine;
 
             return text;
+        }
+
+        private static Dictionary<string, object> ParseArguments(string operation, byte[][] binArgs)
+        {
+            if (!(binArgs?.Length > 0))
+            {
+                return new Dictionary<string, object>();
+            }
+
+            var method = typeof(IWorker).GetMethod(operation);
+            ParameterInfo[] methodParameters = method.GetParameters();
+            if (binArgs.Length != methodParameters.Length)
+            {
+                throw new ArgumentException("Given request parameters did not match parameters for the operation.");
+            }
+
+            var arguments = new Dictionary<string, object>(binArgs.Length);
+            for (int i = 0; i < methodParameters.Length; i++)
+            {
+                if (binArgs[i] == null)
+                {
+                    arguments.Add(methodParameters[i].Name, null);
+                    continue;
+                }
+                using var stream = new MemoryStream(binArgs[i]);
+                arguments.Add(methodParameters[i].Name, Serializer.Deserialize(methodParameters[i].ParameterType, stream));
+            }
+            return arguments;
         }
     }
 }

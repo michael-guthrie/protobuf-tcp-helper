@@ -36,6 +36,9 @@
         private static int _clientExceptions;
         private static int _serverExceptions;
 
+        private static int _currentOpenConnections;
+        private static long _maxOpenConnections;
+
         static async Task Main(string[] args)
         {
             var stopwatch = new Stopwatch();
@@ -47,39 +50,55 @@
             // Perform a simple wake-up call so that timing isn't thrown off by initializing resources.
             await WakeupCall();
 
-            Console.WriteLine("Testing new client per request...");
-            stopwatch.Restart();
-            SendTypeBNewClient();
-            stopwatch.Stop();
-            Console.WriteLine(stopwatch.Elapsed);
+            //GC.Collect();
+            //Console.WriteLine("Testing new client per request...");
+            //stopwatch.Restart();
+            //SendTypeBNewClient();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
-            Console.WriteLine("Testing shared client...");
-            stopwatch.Restart();
-            SendTypeBSharedClient();
-            stopwatch.Stop();
-            Console.WriteLine(stopwatch.Elapsed);
+            //GC.Collect();
+            //Console.WriteLine("Testing shared client...");
+            //stopwatch.Restart();
+            //SendTypeBSharedClient();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
-            Console.WriteLine("Testing parallel client...");
-            stopwatch.Restart();
-            SendTypeBParallelClient();
-            stopwatch.Stop();
-            Console.WriteLine(stopwatch.Elapsed);
+            //GC.Collect();
+            //Console.WriteLine("Testing parallel client...");
+            //stopwatch.Restart();
+            //SendTypeBParallelClient();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
-            Console.WriteLine("Testing new socket per request...");
-            stopwatch.Restart();
-            SendTypeBNewSocket();
-            stopwatch.Stop();
-            Console.WriteLine(stopwatch.Elapsed);
+            //GC.Collect();
+            //Console.WriteLine("Testing new socket per request...");
+            //stopwatch.Restart();
+            //SendTypeBNewSocket();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
-            Console.WriteLine("Testing shared socket...");
-            stopwatch.Restart();
-            SendTypeBSharedSocket();
-            stopwatch.Stop();
-            Console.WriteLine(stopwatch.Elapsed);
+            //GC.Collect();
+            //Console.WriteLine("Testing shared socket...");
+            //stopwatch.Restart();
+            //SendTypeBSharedSocket();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
-            Console.WriteLine("Testing parallel Socket...");
+            //GC.Collect();
+            //Console.WriteLine("Testing parallel socket...");
+            //stopwatch.Restart();
+            //SendTypeBParallelSocket();
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
+
+            Console.WriteLine("Testing loading open connections...");
             stopwatch.Restart();
-            SendTypeBParallelSocket();
+            ConnectionLoadTest();
+            while (_currentOpenConnections > 0)
+            {
+                await Task.Delay(50);
+            }
             stopwatch.Stop();
             Console.WriteLine(stopwatch.Elapsed);
 
@@ -87,6 +106,8 @@
             cancellationTokenSource.Cancel();
 
             Console.WriteLine($"Total client connections: {_clientCount}");
+            Console.WriteLine($"Max open connections: {_maxOpenConnections}");
+            Console.WriteLine($"Current open connections: {_currentOpenConnections}");
             Console.WriteLine($"Total client requests: {_clientRequests}");
             Console.WriteLine($"Total server responses: {_serverResponses}");
             Console.WriteLine($"Total client exceptions: {_clientExceptions}");
@@ -127,9 +148,11 @@
                         Socket client = await server.AcceptSocketAsync().ConfigureAwait(false);
                         //TcpClient client = await server.AcceptTcpClientAsync();
                         ++_clientCount;
+
                         var _ = Worker.HandleClientAsync(client,
                                                          onSendingResponse: (op, result) => Interlocked.Increment(ref _serverResponses),
                                                          onError: ex => Interlocked.Increment(ref _serverExceptions))
+                                      .ContinueWith(t => Interlocked.Decrement(ref _currentOpenConnections))
                                       .ConfigureAwait(false);
                     }
                 }
@@ -156,15 +179,18 @@
                     {
                         Socket client = await server.AcceptSocketAsync().ConfigureAwait(false);
                         //TcpClient client = await server.AcceptTcpClientAsync();
+                        ++_clientCount;
+                        _maxOpenConnections = Math.Max(_maxOpenConnections, Interlocked.Increment(ref _currentOpenConnections));
 
                         if (cancellationToken.IsCancellationRequested)
                         {
                             return;
                         }
 
-                        var _ = Worker.HandleClientAsync(client, 
+                        var _ = Worker.HandleClientAsync(client,
                                                          onSendingResponse: (op, result) => Interlocked.Increment(ref _serverResponses),
                                                          onError: ex => Interlocked.Increment(ref _serverExceptions))
+                                      .ContinueWith(t => Interlocked.Decrement(ref _currentOpenConnections))
                                       .ConfigureAwait(false);
                     }
                 }
@@ -189,20 +215,24 @@
         public static void SendTypeBParallelClient()
         {
             Parallel.For(0, TestSize,
-                         i =>
-                         {
-                             try
-                             {
-                                 using var client = new TcpClient();
-                                 client.Connect(ConnectionConstants.Server);
-                                 using var stream = client.GetStream();
-                                 ClientTestOp(stream);
-                             }
-                             catch
-                             {
-                                 Interlocked.Increment(ref _clientExceptions);
-                             }
-                         }
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Math.Min(TestSize, 2_000)
+                },
+                i =>
+                {
+                    try
+                    {
+                        using var client = new TcpClient();
+                        client.Connect(ConnectionConstants.Server);
+                        using var stream = client.GetStream();
+                        ClientTestOp(stream);
+                    }
+                    catch
+                    {
+                        Interlocked.Increment(ref _clientExceptions);
+                    }
+                }
             );
         }
 
@@ -280,20 +310,45 @@
         public static void SendTypeBParallelSocket()
         {
             Parallel.For(0, TestSize,
-                         i =>
-                         {
-                             try
-                             {
-                                 using var client = new Socket(SocketType.Stream, ProtocolType.Tcp);
-                                 client.Connect(ConnectionConstants.Server);
-                                 SocketTestOp(client);
-                             }
-                             catch
-                             {
-                                 Interlocked.Increment(ref _clientExceptions);
-                             }
-                         }
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Math.Min(TestSize, 2_000)
+                },
+                i =>
+                {
+                    try
+                    {
+                        using var client = new Socket(SocketType.Stream, ProtocolType.Tcp);
+                        client.Connect(ConnectionConstants.Server);
+                        SocketTestOp(client);
+                    }
+                    catch
+                    {
+                        Interlocked.Increment(ref _clientExceptions);
+                    }
+                }
             );
+        }
+
+        public static void ConnectionLoadTest()
+        {
+            try
+            {
+                for (int i = 0; i < TestSize * 10; i++)
+                {
+                    var client = new Socket(SocketType.Stream, ProtocolType.Tcp);
+                    client.Connect(ConnectionConstants.Server);
+                    Task.Run(async () =>
+                    {
+                        await client.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
+                        client.Close();
+                    });
+                }
+            }
+            catch
+            {
+                ++_clientExceptions;
+            }
         }
     }
 }
