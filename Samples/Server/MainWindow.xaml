@@ -7,6 +7,25 @@
         mc:Ignorable="d"
         Title="Server" Height="450" Width="800">
     <Grid>
-        <TextBox IsReadOnly="True" Name="OutputBox" AcceptsReturn="True" TextAlignment="Left" TextWrapping="Wrap"/>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1*"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="200"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="1*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Column="1" Grid.Row="0" Text="Bytes Received: "/>
+        <TextBlock Grid.Column="2" Grid.Row="0" Text="0" Name="BytesReceived"/>
+        <TextBlock Grid.Column="1" Grid.Row="1" Text="Bytes Sent: "/>
+        <TextBlock Grid.Column="2" Grid.Row="1" Text="0" Name="BytesSent"/>
+        <TextBlock Grid.Column="1" Grid.Row="2" Text="Total Tranfer: "/>
+        <TextBlock Grid.Column="2" Grid.Row="2" Text="0" Name="TotalTransfer"/>
+
+        <TextBox Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="3" IsReadOnly="True" Name="OutputBox" AcceptsReturn="True" TextAlignment="Left" TextWrapping="Wrap"/>
     </Grid>
 </Window>

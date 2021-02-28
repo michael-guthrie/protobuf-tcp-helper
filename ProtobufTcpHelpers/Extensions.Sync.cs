@@ -13,10 +13,7 @@
 
     public static partial class Extensions
     {
-        private static readonly Dictionary<Type, Dictionary<string, MethodInfo>> OperationCache = 
-            new Dictionary<Type, Dictionary<string, MethodInfo>>();
-
-        private static async Task<object> InvokeRequestAsync<T>(this T worker, OperationWrapper request)
+        private static object InvokeRequest<T>(this T worker, OperationWrapper request)
         {
             //MethodInfo method;
             //if (!OperationCache.TryGetValue(typeof(T), out Dictionary<string, MethodInfo> workerCache))
@@ -46,7 +43,7 @@
                 {
                     if (request.Arguments[i]?.Length > 0)
                     {
-                        await using var stream = new MemoryStream(request.Arguments[i]);
+                        using var stream = new MemoryStream(request.Arguments[i]);
                         arguments[i] = Serializer.Deserialize(methodParameters[i].ParameterType, stream);
                     }
                     else
@@ -63,18 +60,17 @@
             }
 
             var task = (Task) method.Invoke(worker, arguments);
-            await task.ConfigureAwait(false);
             PropertyInfo resultProperty = task.GetType().GetProperty("Result") ??
                                           throw new InvalidOperationException(
                                               $"Method {request.Operation} must return a result.");
             return resultProperty.GetValue(task);
         }
 
-        private static async Task<OperationWrapper> GetWrapperResponseAsync(this NetworkStream stream, CancellationToken cancellationToken, int bufferSize = 8192)
+        private static OperationWrapper GetWrapperResponse(this NetworkStream stream, int bufferSize = 8192)
         {
             // Read the size header.
             var sizeHeader = new byte[14];
-            await stream.ReadAsync(sizeHeader, 0, sizeHeader.Length, cancellationToken).ConfigureAwait(false);
+            stream.Read(sizeHeader, 0, sizeHeader.Length);
 
             // Validate the size header.
             if (sizeHeader[0] != byte.MaxValue ||
@@ -96,24 +92,25 @@
             // Now parse the size.
             long messageSize = BitConverter.ToInt64(new ArraySegment<byte>(sizeHeader, 3, sizeof(long)));
 
-            await using var ms = new MemoryStream();
+            using var ms = new MemoryStream();
+            //var buffer = new byte[1024];
             var buffer = new byte[bufferSize];
             int readLength = 0;
             while (readLength < messageSize)
             {
                 int blockSize = (int) Math.Min(messageSize - readLength, buffer.Length);
-                readLength += await stream.ReadAsync(buffer, 0, blockSize, cancellationToken);
-                await ms.WriteAsync(buffer, 0, blockSize, cancellationToken).ConfigureAwait(false);
+                readLength += stream.Read(buffer, 0, blockSize);
+                ms.Write(buffer, 0, blockSize);
             }
 
             ms.Position = 0;
             return Serializer.Deserialize<OperationWrapper>(ms);
         }
 
-        private static async Task SendWrapperRequestAsync(this NetworkStream stream, OperationWrapper request, CancellationToken cancellationToken)
+        private static void SendWrapperRequest(this NetworkStream stream, OperationWrapper request)
         {
             // Serialize in memory so we can get the size before sending to the network buffer.
-            await using var ms = new MemoryStream();
+            using var ms = new MemoryStream();
             Serializer.Serialize(ms, request);
 
             // Send the size header.
@@ -121,11 +118,11 @@
             sizeHeader[0] = sizeHeader[2] = sizeHeader[12] = byte.MaxValue;
             Array.Copy(BitConverter.GetBytes(ms.Length), 0, sizeHeader, 3, sizeof(long));
 
-            await stream.WriteAsync(sizeHeader, 0, sizeHeader.Length, cancellationToken).ConfigureAwait(false);
+            stream.Write(sizeHeader, 0, sizeHeader.Length);
 
             // Send the client request.
             ms.Position = 0;
-            await ms.CopyToAsync(stream, cancellationToken).ConfigureAwait(false);
+            ms.CopyTo(stream);
         }
 
         /// <summary>
@@ -136,10 +133,9 @@
         /// <param name="stream">The network stream from the TCP client.</param>
         /// <param name="serviceMethod">Projection of the requested service method.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TResult>(
+        public static TResult Request<TService, TResult>(
             this NetworkStream stream,
-            Expression<Func<TService, Func<TResult>>> serviceMethod,
-            CancellationToken cancellationToken = default)
+            Expression<Func<TService, Func<TResult>>> serviceMethod)
         {
             var targetMethod =
                 (((serviceMethod.Body as UnaryExpression)
@@ -153,9 +149,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name), cancellationToken).ConfigureAwait(false);
+            SendWrapperRequest(stream, OperationWrapper.ForRequest(targetMethod.Name));
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(stream).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -166,10 +162,9 @@
         /// <param name="stream">The network stream from the TCP client.</param>
         /// <param name="asyncServiceMethod">Projection of the requested asynchronous service method.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TResult>(
+        public static TResult Request<TService, TResult>(
             this NetworkStream stream,
-            Expression<Func<TService, Func<Task<TResult>>>> asyncServiceMethod,
-            CancellationToken cancellationToken = default)
+            Expression<Func<TService, Func<Task<TResult>>>> asyncServiceMethod)
         {
             var targetMethod =
                 (((asyncServiceMethod.Body as UnaryExpression)
@@ -183,9 +178,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name), cancellationToken).ConfigureAwait(false);
+            SendWrapperRequest(stream, OperationWrapper.ForRequest(targetMethod.Name));
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(stream).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -198,11 +193,10 @@
         /// <param name="serviceMethod">Projection of the requested service method.</param>
         /// <param name="argument">The argument to send when making performing the service operation.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TArgument, TResult>(
+        public static TResult Request<TService, TArgument, TResult>(
             this NetworkStream stream,
             Expression<Func<TService, Func<TArgument, TResult>>> serviceMethod,
-            TArgument argument,
-            CancellationToken cancellationToken = default)
+            TArgument argument)
         {
             var targetMethod =
                 (((serviceMethod.Body as UnaryExpression)
@@ -216,9 +210,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }), cancellationToken).ConfigureAwait(false);
+            SendWrapperRequest(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(stream).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -231,11 +225,10 @@
         /// <param name="asyncServiceMethod">Projection of the requested asynchronous service method.</param>
         /// <param name="argument">The argument to send when making performing the service operation.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TArgument, TResult>(
+        public static TResult Request<TService, TArgument, TResult>(
             this NetworkStream stream,
             Expression<Func<TService, Func<TArgument, Task<TResult>>>> asyncServiceMethod,
-            TArgument argument,
-            CancellationToken cancellationToken = default)
+            TArgument argument)
         {
             var targetMethod =
                 (((asyncServiceMethod.Body as UnaryExpression)
@@ -249,9 +242,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }), cancellationToken).ConfigureAwait(false);
+            SendWrapperRequest(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
 
-            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(stream).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -264,114 +257,49 @@
         /// <param name="onSendingResponse">(Optional) Action to perform once the worker has processed the operation and prior to sending the server response.</param>
         /// <param name="onError">(Optional) Action to perform when processing encounters an error.</param>
         /// <returns>Awaitable task hosting the background processing of the client socket connection.</returns>
-        public static async Task HandleClientAsync<TService>(
+        public static void HandleClient<TService>(
             this TService worker, TcpClient client,
-            CancellationToken cancellationToken = default,
             Action<string, byte[][]> onRequestReceived = null,
             Action<string, byte[]> onSendingResponse = null,
             Action<Exception> onError = null)
         {
-            await Task.Run(async () =>
+            try
             {
-                try
+                using NetworkStream stream = client.GetStream();
+
+                // Continue reading as long as client requests are available.
+                OperationWrapper request;
+                while (client.Connected && stream.CanRead &&
+                       (request = stream.GetWrapperResponse(client.ReceiveBufferSize)) != OperationWrapper.SessionEnded)
                 {
-                    await using NetworkStream stream = client.GetStream();
+                    onRequestReceived?.Invoke(request.Operation, request.Arguments);
 
-                    // Continue reading as long as client requests are available.
-                    OperationWrapper request;
-                    while (!cancellationToken.IsCancellationRequested &&
-                           client.Connected && stream.CanRead &&
-                           (request = await stream.GetWrapperResponseAsync(cancellationToken, client.ReceiveBufferSize).ConfigureAwait(false)) != OperationWrapper.SessionEnded)
-                    {
-                        onRequestReceived?.Invoke(request.Operation, request.Arguments);
+                    object result = worker.InvokeRequest(request);
 
-                        object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
+                    // Now send back a response.
+                    var response = OperationWrapper.FromResult(request.Operation, result);
+                    onSendingResponse?.Invoke(request.Operation, response.Result);
+                    stream.SendWrapperRequest(response);
 
-                        // Now send back a response.
-                        var response = OperationWrapper.FromResult(request.Operation, result);
-                        onSendingResponse?.Invoke(request.Operation, response.Result);
-                        await stream.SendWrapperRequestAsync(response, cancellationToken);
-
-                        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                    }
+                    stream.Flush();
                 }
-                catch (Exception ex)
+            }
+            catch (Exception ex)
+            {
+                if (onError == null)
                 {
-                    if (onError == null)
-                    {
-                        throw;
-                    }
-
-                    onError(ex);
+                    throw;
                 }
-            }, cancellationToken);
+
+                onError(ex);
+            }
         }
 
-        /// <summary>
-        /// Begins a communication task with a TPC client using the worker instance to perform requested operations.
-        /// </summary>
-        /// <typeparam name="TService">The contract for the service.</typeparam>
-        /// <param name="worker">The TService instance which will fulfill requested operations.</param>
-        /// <param name="client">The TCP client connection.</param>
-        /// <param name="onRequestReceived">(Optional) Action to perform when a client request has been received.</param>
-        /// <param name="onSendingResponse">(Optional) Action to perform once the worker has processed the operation and prior to sending the server response.</param>
-        /// <param name="onError">(Optional) Action to perform when processing encounters an error.</param>
-        /// <returns>Awaitable task hosting the background processing of the client socket connection.</returns>
-        public static async Task HandleClientAsync<TService>(
-            this TService worker, TcpClient client,
-            CancellationToken cancellationToken = default,
-            Func<string, byte[][], Task> onRequestReceived = null,
-            Func<string, byte[], Task> onSendingResponse = null,
-            Func<Exception, Task> onError = null)
-        {
-            await Task.Run(async () =>
-            {
-                try
-                {
-                    await using NetworkStream stream = client.GetStream();
-
-                    // Continue reading as long as client requests are available.
-                    OperationWrapper request;
-                    while (!cancellationToken.IsCancellationRequested &&
-                           client.Connected && stream.CanRead &&
-                           (request = await stream.GetWrapperResponseAsync(cancellationToken, client.ReceiveBufferSize).ConfigureAwait(false)) != OperationWrapper.SessionEnded)
-                    {
-                        if (onRequestReceived != null)
-                        {
-                            await onRequestReceived.Invoke(request.Operation, request.Arguments).ConfigureAwait(false);
-                        }
-
-                        object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
-
-                        // Now send back a response.
-                        var response = OperationWrapper.FromResult(request.Operation, result);
-                        if (onSendingResponse != null)
-                        {
-                            await onSendingResponse.Invoke(request.Operation, response.Result).ConfigureAwait(false);
-                        }
-
-                        await stream.SendWrapperRequestAsync(response, cancellationToken).ConfigureAwait(false);
-
-                        await stream.FlushAsync().ConfigureAwait(false);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (onError == null)
-                    {
-                        throw;
-                    }
-
-                    await onError.Invoke(ex).ConfigureAwait(false);
-                }
-            }, cancellationToken);
-        }
-
-        internal static async Task<OperationWrapper> GetWrapperResponseAsync(this Socket socket)
+        internal static OperationWrapper GetWrapperResponse(this Socket socket)
         {
             // Read the size header.
             var sizeHeader = new byte[14];
-            if (await socket.ReceiveAsync(sizeHeader, SocketFlags.None).ConfigureAwait(false) == 0)
+            if (socket.Receive(sizeHeader, SocketFlags.None) == 0)
             {
                 return OperationWrapper.SessionEnded;
             }
@@ -396,7 +324,7 @@
             // Now parse the size.
             long messageSize = BitConverter.ToInt64(new ArraySegment<byte>(sizeHeader, 3, sizeof(long)));
 
-            await using var ms = new MemoryStream();
+            using var ms = new MemoryStream();
             var buffer = new byte[Math.Min(socket.ReceiveBufferSize, messageSize)];
             int readLength = 0;
             while (readLength < messageSize)
@@ -405,19 +333,19 @@
                 {
                     Array.Resize(ref buffer, (int) messageSize - readLength);
                 }
-                await socket.ReceiveAsync(buffer, SocketFlags.None).ConfigureAwait(false);
+                socket.Receive(buffer, SocketFlags.None);
                 readLength += buffer.Length;
-                await ms.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                ms.Write(buffer, 0, buffer.Length);
             }
 
             ms.Position = 0;
             return Serializer.Deserialize<OperationWrapper>(ms);
         }
 
-        internal static async Task SendWrapperRequestAsync(this Socket socket, OperationWrapper request, CancellationToken cancellationToken = default)
+        internal static void SendWrapperRequest(this Socket socket, OperationWrapper request)
         {
             // Serialize in memory so we can get the size before sending to the network buffer.
-            await using var ms = new MemoryStream();
+            using var ms = new MemoryStream();
             Serializer.Serialize(ms, request);
 
             // Send the size header.
@@ -425,11 +353,11 @@
             sizeHeader[0] = sizeHeader[2] = sizeHeader[12] = byte.MaxValue;
             Array.Copy(BitConverter.GetBytes(ms.Length), 0, sizeHeader, 3, sizeof(long));
 
-            await socket.SendAsync(sizeHeader, SocketFlags.None, cancellationToken).ConfigureAwait(false);
+            socket.Send(sizeHeader, SocketFlags.None);
 
             // Send the client request.
             ms.Position = 0;
-            await socket.SendAsync(ms.ToArray(), SocketFlags.None, cancellationToken).ConfigureAwait(false);
+            socket.Send(ms.ToArray(), SocketFlags.None);
         }
 
         /// <summary>
@@ -440,7 +368,7 @@
         /// <param name="socket">The TCP client socket.</param>
         /// <param name="serviceMethod">Projection of the requested service method.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TResult>(
+        public static TResult Request<TService, TResult>(
             this Socket socket,
             Expression<Func<TService, Func<TResult>>> serviceMethod)
         {
@@ -456,9 +384,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name)).ConfigureAwait(false);
+            SendWrapperRequest(socket, OperationWrapper.ForRequest(targetMethod.Name));
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(socket).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -469,7 +397,7 @@
         /// <param name="socket">The TCP client socket.</param>
         /// <param name="asyncServiceMethod">Projection of the requested asynchronous service method.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TResult>(
+        public static TResult Request<TService, TResult>(
             this Socket socket,
             Expression<Func<TService, Func<Task<TResult>>>> asyncServiceMethod)
         {
@@ -485,9 +413,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name)).ConfigureAwait(false);
+            SendWrapperRequest(socket, OperationWrapper.ForRequest(targetMethod.Name));
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(socket).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -500,7 +428,7 @@
         /// <param name="serviceMethod">Projection of the requested service method.</param>
         /// <param name="argument">The argument to send when making performing the service operation.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TArgument, TResult>(
+        public static TResult Request<TService, TArgument, TResult>(
             this Socket socket,
             Expression<Func<TService, Func<TArgument, TResult>>> serviceMethod,
             TArgument argument)
@@ -517,9 +445,9 @@
                                             nameof(serviceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument })).ConfigureAwait(false);
+            SendWrapperRequest(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(socket).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -532,7 +460,7 @@
         /// <param name="asyncServiceMethod">Projection of the requested asynchronous service method.</param>
         /// <param name="argument">The argument to send when making performing the service operation.</param>
         /// <returns>The result of the service operation.</returns>
-        public static async Task<TResult> RequestAsync<TService, TArgument, TResult>(
+        public static TResult Request<TService, TArgument, TResult>(
             this Socket socket,
             Expression<Func<TService, Func<TArgument, Task<TResult>>>> asyncServiceMethod,
             TArgument argument)
@@ -549,9 +477,9 @@
                                             nameof(asyncServiceMethod));
             }
 
-            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument })).ConfigureAwait(false);
+            SendWrapperRequest(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
 
-            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
+            return GetWrapperResponse(socket).GetResultAs<TResult>();
         }
 
         /// <summary>
@@ -564,99 +492,40 @@
         /// <param name="onSendingResponse">(Optional) Action to perform once the worker has processed the operation and prior to sending the server response.</param>
         /// <param name="onError">(Optional) Action to perform when processing encounters an error.</param>
         /// <returns>Awaitable task hosting the background processing of the client socket connection.</returns>
-        public static async Task HandleClientAsync<TService>(
+        public static void HandleClient<TService>(
             this TService worker, Socket clientSocket,
             CancellationToken cancellationToken = default,
             Action<string, byte[][]> onRequestReceived = null,
             Action<string, byte[]> onSendingResponse = null,
             Action<Exception> onError = null)
         {
-            await Task.Run(async () =>
+            try
             {
-                try
+                // Continue reading as long as client requests are available.
+                OperationWrapper request;
+                while (!cancellationToken.IsCancellationRequested &&
+                       clientSocket.Connected &&
+                       (request = clientSocket.GetWrapperResponse()) != OperationWrapper.SessionEnded)
                 {
-                    // Continue reading as long as client requests are available.
-                    OperationWrapper request;
-                    while (!cancellationToken.IsCancellationRequested &&
-                           clientSocket.Connected &&
-                           (request = await clientSocket.GetWrapperResponseAsync().ConfigureAwait(false)) != OperationWrapper.SessionEnded)
-                    {
-                        onRequestReceived?.Invoke(request.Operation, request.Arguments);
+                    onRequestReceived?.Invoke(request.Operation, request.Arguments);
 
-                        object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
+                    object result = worker.InvokeRequest(request);
 
-                        // Now send back a response.
-                        var response = OperationWrapper.FromResult(request.Operation, result);
-                        onSendingResponse?.Invoke(request.Operation, response.Result);
-                        await clientSocket.SendWrapperRequestAsync(response, cancellationToken).ConfigureAwait(false);
-                    }
+                    // Now send back a response.
+                    var response = OperationWrapper.FromResult(request.Operation, result);
+                    onSendingResponse?.Invoke(request.Operation, response.Result);
+                    clientSocket.SendWrapperRequest(response);
                 }
-                catch (Exception ex)
-                {
-                    if (onError == null)
-                    {
-                        throw;
-                    }
-
-                    onError(ex);
-                }
-            });
-        }
-        
-        /// <summary>
-        /// Begins a communication task with a client socket using the worker instance to perform requested operations.
-        /// </summary>
-        /// <typeparam name="TService">The contract for the service.</typeparam>
-        /// <param name="worker">The TService instance which will fulfill requested operations.</param>
-        /// <param name="clientSocket">The client socket connection.</param>
-        /// <param name="onRequestReceived">(Optional) Action to perform when a client request has been received.</param>
-        /// <param name="onSendingResponse">(Optional) Action to perform once the worker has processed the operation and prior to sending the server response.</param>
-        /// <param name="onError">(Optional) Action to perform when processing encounters an error.</param>
-        /// <returns>Awaitable task hosting the background processing of the client socket connection.</returns>
-        public static async Task HandleClientAsync<TService>(
-            this TService worker, Socket clientSocket,
-            CancellationToken cancellationToken = default,
-            Func<string, byte[][], Task> onRequestReceived = null,
-            Func<string, byte[], Task> onSendingResponse = null,
-            Func<Exception, Task> onError = null)
-        {
-            await Task.Run(async () =>
+            }
+            catch (Exception ex)
             {
-                try
+                if (onError == null)
                 {
-                    // Continue reading as long as client requests are available.
-                    OperationWrapper request;
-                    while (!cancellationToken.IsCancellationRequested &&
-                           clientSocket.Connected &&
-                           (request = await clientSocket.GetWrapperResponseAsync().ConfigureAwait(false)) != OperationWrapper.SessionEnded)
-                    {
-                        if (onRequestReceived != null)
-                        {
-                            await onRequestReceived.Invoke(request.Operation, request.Arguments).ConfigureAwait(false);
-                        }
-
-                        object result = await worker.InvokeRequestAsync(request).ConfigureAwait(false);
-
-                        // Now send back a response.
-                        var response = OperationWrapper.FromResult(request.Operation, result);
-                        if (onSendingResponse != null)
-                        {
-                            await onSendingResponse.Invoke(request.Operation, response.Result).ConfigureAwait(false);
-                        }
-
-                        await clientSocket.SendWrapperRequestAsync(response, cancellationToken).ConfigureAwait(false);
-                    }
+                    throw;
                 }
-                catch (Exception ex)
-                {
-                    if (onError == null)
-                    {
-                        throw;
-                    }
 
-                    await onError.Invoke(ex).ConfigureAwait(false);
-                }
-            });
+                onError(ex);
+            }
         }
     }
 }

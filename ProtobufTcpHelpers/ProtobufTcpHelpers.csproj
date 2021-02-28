@@ -13,6 +13,11 @@
     <Company>Mike Guthrie</Company>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="protobuf-net" Version="2.4.4" />
   </ItemGroup>

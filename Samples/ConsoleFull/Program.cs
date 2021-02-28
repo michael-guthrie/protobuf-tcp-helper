@@ -39,6 +39,10 @@
         private static int _currentOpenConnections;
         private static long _maxOpenConnections;
 
+        public static long _transferSize;
+
+        private static readonly SemaphoreSlim _countSemaphore = new SemaphoreSlim(1);
+
         static async Task Main(string[] args)
         {
             var stopwatch = new Stopwatch();
@@ -71,36 +75,36 @@
             //stopwatch.Stop();
             //Console.WriteLine(stopwatch.Elapsed);
 
-            //GC.Collect();
-            //Console.WriteLine("Testing new socket per request...");
-            //stopwatch.Restart();
-            //SendTypeBNewSocket();
-            //stopwatch.Stop();
-            //Console.WriteLine(stopwatch.Elapsed);
-
-            //GC.Collect();
-            //Console.WriteLine("Testing shared socket...");
-            //stopwatch.Restart();
-            //SendTypeBSharedSocket();
-            //stopwatch.Stop();
-            //Console.WriteLine(stopwatch.Elapsed);
-
-            //GC.Collect();
-            //Console.WriteLine("Testing parallel socket...");
-            //stopwatch.Restart();
-            //SendTypeBParallelSocket();
-            //stopwatch.Stop();
-            //Console.WriteLine(stopwatch.Elapsed);
-
-            Console.WriteLine("Testing loading open connections...");
+            GC.Collect();
+            Console.WriteLine("Testing new socket per request...");
             stopwatch.Restart();
-            ConnectionLoadTest();
-            while (_currentOpenConnections > 0)
-            {
-                await Task.Delay(50);
-            }
+            SendTypeBNewSocket();
             stopwatch.Stop();
             Console.WriteLine(stopwatch.Elapsed);
+
+            GC.Collect();
+            Console.WriteLine("Testing shared socket...");
+            stopwatch.Restart();
+            SendTypeBSharedSocket();
+            stopwatch.Stop();
+            Console.WriteLine(stopwatch.Elapsed);
+
+            GC.Collect();
+            Console.WriteLine("Testing parallel socket...");
+            stopwatch.Restart();
+            SendTypeBParallelSocket();
+            stopwatch.Stop();
+            Console.WriteLine(stopwatch.Elapsed);
+
+            //Console.WriteLine("Testing loading open connections...");
+            //stopwatch.Restart();
+            //ConnectionLoadTest();
+            //while (_currentOpenConnections > 0)
+            //{
+            //    await Task.Delay(50);
+            //}
+            //stopwatch.Stop();
+            //Console.WriteLine(stopwatch.Elapsed);
 
             _isOpen = false;
             cancellationTokenSource.Cancel();
@@ -112,6 +116,7 @@
             Console.WriteLine($"Total server responses: {_serverResponses}");
             Console.WriteLine($"Total client exceptions: {_clientExceptions}");
             Console.WriteLine($"Total server exceptions: {_serverExceptions}");
+            Console.WriteLine($"Total transfer size: {_transferSize}");
         }
 
         private static readonly TaskFactory factory = new
@@ -123,15 +128,19 @@
 
         private static void ClientTestOp(NetworkStream stream)
         {
-            RunSync(async () => await stream.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
+            //RunSync(async () => await stream.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
             //RunSync(async () => await stream.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
+            stream.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
+            stream.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
             Interlocked.Increment(ref _clientRequests);
         }
 
         private static void SocketTestOp(Socket socket)
         {
-            RunSync(async () => await socket.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
+            //RunSync(async () => await socket.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
             //RunSync(async () => await socket.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
+            socket.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
+            socket.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
             Interlocked.Increment(ref _clientRequests);
         }
 
@@ -169,6 +178,20 @@
 
         public static async Task StartListener(CancellationToken cancellationToken)
         {
+            void OnReceivedRequest(string operation, byte[][] arguments)
+            {
+                _countSemaphore.Wait();
+                _transferSize += arguments?.Sum(a => a?.Length ?? 0) ?? 0;
+                _countSemaphore.Release();
+            }
+            void OnSendingReponse(string operation, byte[] result)
+            {
+                _countSemaphore.Wait();
+                _serverResponses++;
+                _transferSize += result?.Length ?? 0;
+                _countSemaphore.Release();
+            }
+
             await Task.Run(async () =>
             {
                 var server = new TcpListener(ConnectionConstants.Server);
@@ -178,20 +201,40 @@
                     while (!cancellationToken.IsCancellationRequested)
                     {
                         Socket client = await server.AcceptSocketAsync().ConfigureAwait(false);
-                        //TcpClient client = await server.AcceptTcpClientAsync();
-                        ++_clientCount;
-                        _maxOpenConnections = Math.Max(_maxOpenConnections, Interlocked.Increment(ref _currentOpenConnections));
-
-                        if (cancellationToken.IsCancellationRequested)
+                        var _ = Task.Run(async () =>
                         {
-                            return;
-                        }
+                            _countSemaphore.Wait();
+                            ++_clientCount;
+                            _maxOpenConnections = Math.Max(_maxOpenConnections, ++_currentOpenConnections);
+                            _countSemaphore.Release();
 
-                        var _ = Worker.HandleClientAsync(client,
-                                                         onSendingResponse: (op, result) => Interlocked.Increment(ref _serverResponses),
-                                                         onError: ex => Interlocked.Increment(ref _serverExceptions))
-                                      .ContinueWith(t => Interlocked.Decrement(ref _currentOpenConnections))
-                                      .ConfigureAwait(false);
+                            await Worker.HandleClientAsync(client,
+                                                           cancellationToken: cancellationToken,
+                                                           onRequestReceived: OnReceivedRequest,
+                                                           onSendingResponse: OnSendingReponse,
+                                                           onError: ex => Interlocked.Increment(ref _serverExceptions))
+                                          .ConfigureAwait(false);
+                            _countSemaphore.Wait();
+                            --_currentOpenConnections;
+                            _countSemaphore.Release();
+                        }, cancellationToken).ConfigureAwait(false);
+
+                        ////TcpClient client = await server.AcceptTcpClientAsync();
+                        //++_clientCount;
+                        //_maxOpenConnections = Math.Max(_maxOpenConnections, Interlocked.Increment(ref _currentOpenConnections));
+
+                        //if (cancellationToken.IsCancellationRequested)
+                        //{
+                        //    return;
+                        //}
+
+                        //var _ = Worker.HandleClientAsync(client,
+                        //                                 cancellationToken: cancellationToken,
+                        //                                 onRequestReceived: OnReceivedRequest,
+                        //                                 onSendingResponse: OnSendingReponse,
+                        //                                 onError: ex =>Interlocked.Increment(ref _serverExceptions))
+                        //              .ContinueWith(t => Interlocked.Decrement(ref _currentOpenConnections))
+                        //              .ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -202,7 +245,7 @@
                 {
                     server.Stop();
                 }
-            });
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         public static async Task WakeupCall()

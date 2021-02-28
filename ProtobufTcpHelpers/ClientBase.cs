@@ -1,10 +1,10 @@
 ﻿namespace ProtobufTcpHelpers
 {
     using System;
+    using System.Linq;
     using System.Linq.Expressions;
     using System.Net;
     using System.Net.Sockets;
-    using System.Runtime.CompilerServices;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -31,13 +31,15 @@
             return _client;
         }
 
-        protected async Task<TResult> MakeRequestAsync<TResult>([CallerMemberName] string invokingMethod = "") =>
-            await MakeRequestAsync<object, TResult>(null, invokingMethod);
-
-        protected async Task<TResult> MakeRequestAsync<TArgument, TResult>(TArgument requestParameter,
-                                                          [CallerMemberName] string invokingMethod = "")
+        protected async Task<TResult> MakeRequestAsync<TResult>(params object[] requestParameters)
         {
-            var request = OperationWrapper.ForRequest(invokingMethod, new object[] { requestParameter });
+            var targetStack = new System.Diagnostics.StackTrace(1).GetFrames().FirstOrDefault(f =>
+            {
+                var t = f.GetMethod().DeclaringType;
+                return t != typeof(ClientBase) && t.IsInstanceOfType(this);
+            });
+            string invokingMethod = targetStack.GetMethod().Name;
+            var request = OperationWrapper.ForRequest(invokingMethod, requestParameters);
             _lock.Wait();
 
             try
@@ -69,9 +71,14 @@
         private readonly IPEndPoint _server;
         private Socket _client;
 
+        public TServiceContract Service { get; }
+
         public ClientBase(IPEndPoint server)
         {
             _server = server;
+
+            // TODO: Somehow magically mock up a dynamic implementation of Service to pipe all method calls through the MakeRequest logic.
+            //Service = null;
         }
 
         private Socket GetSocket()
@@ -86,7 +93,7 @@
             return _client;
         }
 
-        public async Task<TResult> MakeRequestAsync<TResult>(Expression<Func<TServiceContract, Func<TResult>>> serviceMethod)
+        public async Task<TResult> MakeRequestAsync<TResult>(Expression<Func<TServiceContract, Func<Task<TResult>>>> serviceMethod)
         {
             _lock.Wait();
             try
@@ -101,7 +108,7 @@
         }
 
         public async Task<TResult> MakeRequestAsync<TArgument, TResult>(
-            Expression<Func<TServiceContract, Func<TArgument, TResult>>> serviceMethod, TArgument requestParameter)
+            Expression<Func<TServiceContract, Func<TArgument, Task<TResult>>>> serviceMethod, TArgument requestParameter)
         {
             _lock.Wait();
             try

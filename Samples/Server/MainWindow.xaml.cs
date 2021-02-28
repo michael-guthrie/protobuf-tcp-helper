@@ -21,6 +21,9 @@
         private readonly Worker _worker;
         private bool _isOpen = true;
 
+        private long _bytesReceived;
+        private long _bytesSent;
+
         public MainWindow()
         {
             _worker = new Worker();
@@ -43,7 +46,22 @@
                             client,
                             onRequestReceived: async (op, body) =>
                                 await Dispatcher.InvokeAsync(
-                                    () => OutputBox.AppendText(GetOutputText(op, body) + Environment.NewLine))).ConfigureAwait(false);
+                                    () =>
+                                    {
+                                        _bytesReceived += body?.Sum(a => a?.Length ?? 0) ?? 0;
+                                        //OutputBox.AppendText(GetOutputText(op, body) + Environment.NewLine);
+                                        BytesReceived.Text = $"{_bytesReceived:N0}";
+                                        TotalTransfer.Text = $"{_bytesReceived + _bytesSent:N0}";
+                                    }),
+                            onSendingResponse: async (op, body) =>
+                                await Dispatcher.InvokeAsync(
+                                    () =>
+                                    {
+                                        _bytesSent += body?.Length ?? 0;
+                                        BytesSent.Text = $"{_bytesSent:N0}";
+                                        TotalTransfer.Text = $"{_bytesReceived + _bytesSent:N0}";
+                                    })
+                                ).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)

@@ -19,10 +19,10 @@
 
         public async Task<ICollection<PocTypeB>> GetTypeBsAsync() => await MakeRequestAsync<ICollection<PocTypeB>>();
 
-        public async Task<PocTypeA> GetTypeAAsync(int id) => await MakeRequestAsync<int, PocTypeA>(id);
+        public async Task<PocTypeA> GetTypeAAsync(int id) => await MakeRequestAsync<PocTypeA>(id);
 
-        public async Task<int> SendTypeAAsync(PocTypeA model) => await MakeRequestAsync<PocTypeA, int>(model);
+        public async Task<int> SendTypeAAsync(PocTypeA model) => await MakeRequestAsync<int>(model);
 
-        public async Task<int> SendTypeBAsync(PocTypeB model) => await MakeRequestAsync<PocTypeB, int>(model);
+        public async Task<int> SendTypeBAsync(PocTypeB model) => await MakeRequestAsync<int>(model);
     }
 }
