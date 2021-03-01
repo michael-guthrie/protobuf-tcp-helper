@@ -130,8 +130,9 @@
         {
             //RunSync(async () => await stream.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
             //RunSync(async () => await stream.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
-            stream.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
-            stream.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
+            //stream.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
+            //stream.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
+            stream.Request<IWorker, int>(nameof(Worker.SendTypeBAsync), TestTypeB);
             Interlocked.Increment(ref _clientRequests);
         }
 
@@ -139,8 +140,9 @@
         {
             //RunSync(async () => await socket.RequestAsync<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA));
             //RunSync(async () => await socket.RequestAsync<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB));
-            socket.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
-            socket.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
+            //socket.Request<IWorker, PocTypeA, int>(worker => worker.SendTypeAAsync, TestTypeA);
+            //socket.Request<IWorker, PocTypeB, int>(worker => worker.SendTypeBAsync, TestTypeB);
+            socket.Request<IWorker, int>(nameof(Worker.SendTypeBAsync), TestTypeB);
             Interlocked.Increment(ref _clientRequests);
         }
 

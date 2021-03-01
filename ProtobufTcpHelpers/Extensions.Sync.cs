@@ -1,7 +1,6 @@
 ﻿namespace ProtobufTcpHelpers
 {
     using System;
-    using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Linq.Expressions;
@@ -15,18 +14,6 @@
     {
         private static object InvokeRequest<T>(this T worker, OperationWrapper request)
         {
-            //MethodInfo method;
-            //if (!OperationCache.TryGetValue(typeof(T), out Dictionary<string, MethodInfo> workerCache))
-            //{
-            //    workerCache = new Dictionary<string, MethodInfo>();
-            //    OperationCache.Add(typeof(T), workerCache);
-            //}
-            //if (!workerCache.TryGetValue(request.Operation, out method))
-            //{
-            //    method = typeof(T).GetMethod(request.Operation) ??
-            //        throw new ArgumentException("Request operation was invalid.", nameof(request));
-            //    workerCache.Add(request.Operation, method);
-            //}
             MethodInfo method = typeof(T).GetMethod(request.Operation) ??
                                 throw new ArgumentException("Request operation was invalid.", nameof(request));
 
@@ -243,6 +230,31 @@
             }
 
             SendWrapperRequest(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
+
+            return GetWrapperResponse(stream).GetResultAs<TResult>();
+        }
+
+        /// <summary>
+        /// Sends a client request across the network stream and retrieves the result.
+        /// </summary>
+        /// <typeparam name="TService">The contract for the service.</typeparam>
+        /// <typeparam name="TResult">The type of the return value of the requested service operation.</typeparam>
+        /// <param name="stream">The network stream from the TCP client.</param>
+        /// <param name="methodName">The name of the method invoked over the service.</param>
+        /// <param name="arguments">The arguments to send when performing the service operation.</param>
+        /// <returns>The result of the service operation.</returns>
+        public static TResult Request<TService, TResult>(
+            this NetworkStream stream,
+            string methodName,
+            params object[] arguments)
+        {
+            if (typeof(TService).GetMethod(methodName) == null)
+            {
+                throw new ArgumentException($"Target IWorker method '{methodName}' could not be found.",
+                                            nameof(methodName));
+            }
+
+            SendWrapperRequest(stream, OperationWrapper.ForRequest(methodName, arguments));
 
             return GetWrapperResponse(stream).GetResultAs<TResult>();
         }
@@ -478,6 +490,31 @@
             }
 
             SendWrapperRequest(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }));
+
+            return GetWrapperResponse(socket).GetResultAs<TResult>();
+        }
+
+        /// <summary>
+        /// Sends a client request across the network socket and retrieves the result.
+        /// </summary>
+        /// <typeparam name="TService">The contract for the service.</typeparam>
+        /// <typeparam name="TResult">The type of the return value of the requested service operation.</typeparam>
+        /// <param name="socket">The TCP client socket.</param>
+        /// <param name="methodName">The name of the method invoked over the service.</param>
+        /// <param name="arguments">The arguments to send when performing the service operation.</param>
+        /// <returns>The result of the service operation.</returns>
+        public static TResult Request<TService, TResult>(
+            this Socket socket,
+            string methodName,
+            params object[] arguments)
+        {
+            if (typeof(TService).GetMethod(methodName) == null)
+            {
+                throw new ArgumentException($"Target IWorker method '{methodName}' could not be found.",
+                                            nameof(methodName));
+            }
+
+            SendWrapperRequest(socket, OperationWrapper.ForRequest(methodName, arguments));
 
             return GetWrapperResponse(socket).GetResultAs<TResult>();
         }

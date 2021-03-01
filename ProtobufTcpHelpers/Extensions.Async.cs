@@ -13,23 +13,8 @@
 
     public static partial class Extensions
     {
-        private static readonly Dictionary<Type, Dictionary<string, MethodInfo>> OperationCache = 
-            new Dictionary<Type, Dictionary<string, MethodInfo>>();
-
         private static async Task<object> InvokeRequestAsync<T>(this T worker, OperationWrapper request)
         {
-            //MethodInfo method;
-            //if (!OperationCache.TryGetValue(typeof(T), out Dictionary<string, MethodInfo> workerCache))
-            //{
-            //    workerCache = new Dictionary<string, MethodInfo>();
-            //    OperationCache.Add(typeof(T), workerCache);
-            //}
-            //if (!workerCache.TryGetValue(request.Operation, out method))
-            //{
-            //    method = typeof(T).GetMethod(request.Operation) ??
-            //        throw new ArgumentException("Request operation was invalid.", nameof(request));
-            //    workerCache.Add(request.Operation, method);
-            //}
             MethodInfo method = typeof(T).GetMethod(request.Operation) ??
                                 throw new ArgumentException("Request operation was invalid.", nameof(request));
 
@@ -97,8 +82,8 @@
             long messageSize = BitConverter.ToInt64(new ArraySegment<byte>(sizeHeader, 3, sizeof(long)));
 
             await using var ms = new MemoryStream();
-            var buffer = new byte[bufferSize];
             int readLength = 0;
+            var buffer = new byte[(int) Math.Min(messageSize - readLength, bufferSize)];
             while (readLength < messageSize)
             {
                 int blockSize = (int) Math.Min(messageSize - readLength, buffer.Length);
@@ -250,6 +235,32 @@
             }
 
             await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument }), cancellationToken).ConfigureAwait(false);
+
+            return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
+        }
+
+        /// <summary>
+        /// Sends a client request across the network stream and retrieves the result.
+        /// </summary>
+        /// <typeparam name="TService">The contract for the service.</typeparam>
+        /// <typeparam name="TResult">The type of the return value of the requested service operation.</typeparam>
+        /// <param name="stream">The network stream from the TCP client.</param>
+        /// <param name="methodName">The name of the method invoked over the service.</param>
+        /// <param name="arguments">The arguments to send when performing the service operation.</param>
+        /// <returns>The result of the service operation.</returns>
+        public static async Task<TResult> RequestAsync<TService, TResult>(
+            this NetworkStream stream,
+            string methodName,
+            CancellationToken cancellationToken,
+            params object[] arguments)
+        {
+            if (typeof(TService).GetMethod(methodName) == null)
+            {
+                throw new ArgumentException($"Target IWorker method '{methodName}' could not be found.",
+                                            nameof(methodName));
+            }
+
+            await SendWrapperRequestAsync(stream, OperationWrapper.ForRequest(methodName, arguments), cancellationToken).ConfigureAwait(false);
 
             return (await GetWrapperResponseAsync(stream, cancellationToken).ConfigureAwait(false)).GetResultAs<TResult>();
         }
@@ -550,6 +561,31 @@
             }
 
             await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(targetMethod.Name, new object[] { argument })).ConfigureAwait(false);
+
+            return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
+        }
+
+        /// <summary>
+        /// Sends a client request across the network socket and retrieves the result.
+        /// </summary>
+        /// <typeparam name="TService">The contract for the service.</typeparam>
+        /// <typeparam name="TResult">The type of the return value of the requested service operation.</typeparam>
+        /// <param name="socket">The TCP client socket.</param>
+        /// <param name="asyncServiceMethod">Projection of the requested asynchronous service method.</param>
+        /// <param name="argument">The argument to send when making performing the service operation.</param>
+        /// <returns>The result of the service operation.</returns>
+        public static async Task<TResult> RequestAsync<TService, TResult>(
+            this Socket socket,
+            string methodName,
+            params object[] arguments)
+        {
+            if (typeof(TService).GetMethod(methodName) == null)
+            {
+                throw new ArgumentException($"Target IWorker method '{methodName}' could not be found.",
+                                            nameof(methodName));
+            }
+
+            await SendWrapperRequestAsync(socket, OperationWrapper.ForRequest(methodName, arguments)).ConfigureAwait(false);
 
             return (await GetWrapperResponseAsync(socket).ConfigureAwait(false)).GetResultAs<TResult>();
         }
